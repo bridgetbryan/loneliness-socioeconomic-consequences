@@ -1,0 +1,603 @@
+/* 
+
+Title: The socioeconomic consequences of loneliness: Evidence from an nationally representative longitudinal study of young adults. Code written by Bridget T. Bryan and reviewed by Anthony Ambler and Katherine N. Thompson.
+
+*/
+
+
+************************** DATA PREP **************************
+
+/* Custom program for making pro-rated scales */
+capture program drop prorate
+program define prorate
+syntax varlist, gen(string) [verbose]
+capture confirm variable `gen'
+if !_rc {
+           disp in red "A variable with the name `gen' already exists."          
+           exit
+           }
+foreach v of varlist `varlist' {
+           capture confirm numeric variable `v'
+           if !_rc {
+                     }
+                     else {
+                                disp in red "Variable `v' is non-numeric."
+                                exit
+                           }
+                }
+capture drop n_`gen'
+quietly gen n_`gen' = 0
+foreach var in `varlist' {
+           quietly replace n_`gen'=n_`gen'+1
+           }
+if n_`gen' < 3 {
+                     disp in red "Too few input variables; at least 3 required."
+                     drop n_`gen'
+                     exit
+                     }
+capture drop min_`gen'
+capture drop m_`gen'
+capture drop i_`gen'
+capture drop `gen'
+quietly gen min_`gen' = round((n_`gen'/2),1)
+quietly egen m_`gen' = rowmiss(`varlist')
+quietly gen i_`gen' = .
+quietly egen `gen' = rowtotal(`varlist')
+quietly replace `gen' = (`gen'/(n_`gen'-m_`gen'))*n_`gen' if m_`gen' < min_`gen'
+quietly replace `gen' = . if m_`gen' >= min_`gen'
+quietly replace i_`gen' = 1 if m_`gen' < min_`gen'
+quietly replace i_`gen' = 0 if m_`gen' == 0
+quietly replace i_`gen' = . if m_`gen' >= min_`gen'
+label variable m_`gen' "Missing count for `gen'"
+label variable i_`gen' "Pro-rating indicator for `gen'"
+capture matrix drop mat_`gen'
+quietly tab i_`gen', mis matcell(mat_`gen')
+disp _newline "Pro-rating outcome for variable `gen':" _newline _newline ///
+"- " mat_`gen'[1,1] " complete cases" _newline ///
+"- " mat_`gen'[2,1] " cases pro-rated where at least " min_`gen' ///
+" of " n_`gen' " items present" _newline ///
+"- " mat_`gen'[3,1] " missing" _newline _newline ///
+"Final N = " (mat_`gen'[1,1] + mat_`gen'[2,1])
+if "`verbose'" != "" {
+           capture drop rnd_`gen'
+           quietly gen div_`gen'="---->"
+           quietly gen rnd_`gen'=round(`gen',0.01)
+           disp _newline "Pro-rated incomplete cases (last col contains score):"
+           list `varlist' div_`gen' rnd_`gen' if i_`gen' == 1, ///
+           clean nolabel noheader compress
+           disp _newline "Incomplete cases unable to pro-rate:"
+           list `varlist' if i_`gen' == . & m_`gen' < n_`gen', ///
+           clean nolabel noheader compress
+           drop rnd_`gen' div_`gen'
+           }
+drop n_`gen' min_`gen'
+matrix drop mat_`gen'
+end
+
+/* Phase 12 variables */
+{
+** Drinks without parents permission - dichotomise
+codebook pe70bm12 
+recode pe70bm12 (0=0) (1/2=1), gen (alce12)
+
+label var alce12 "Drinks alcohol without parents' approval (dummy)"
+label define alce12 0 "Not true" 1 "Sometimes or very often true"
+label values alce12 alce12
+
+tab pe70bm12 alce12
+
+** Smokes tobacco - dichotomise
+codebook pe70cm12
+recode pe70cm12 (0=0) (1/2=1), gen (smoke12)
+
+label var smoke12 "Smokes tobacco (dummy)"
+label define smoke12 0 "Not true" 1 "Sometimes or very often true"
+label values smoke12 smoke12
+
+tab pe70cm12 smoke12 
+
+** Subjective social status - recode 
+codebook sta04ec12
+recode sta04ec12 (0=1) (1=2) (2=3) (3=4) (4=5) (.=.), gen(sta04ec12r)
+codebook sta04ec12 sta04ec12r
+label var sta04ec12r "Status within country - P12 - Elder (recode)"
+label define sta04ec12r 1 "Poor" 5 "Rich"
+label values sta04ec12r sta04ec12r
+}
+
+/* Phase 18 variables */
+{
+*** Preparing employability sub-scales
+** Job chances sum variable
+{
+* Elder 
+prorate dem12ae18 dem12be18 dem12ce18 dem12de18 dem12ee18 dem12fe18 dem12ge18 dem12he18 dem12ie18 dem12je18 dem12ke18 dem12le18 dem12me18 dem12ne18 dem12oe18, gen(jchnce18) verbose
+label var jchnce18 "Factors hurting job chances (sum) - elder"
+
+* Younger
+prorate dem12ay18 dem12by18 dem12cy18 dem12dy18 dem12ey18 dem12fy18 dem12gy18 dem12hy18 dem12iy18 dem12jy18 dem12ky18 dem12ly18 dem12my18 dem12ny18 dem12oy18, gen(jchncy18) verbose
+label var jchncy18 "Factors hurting job chances (sum) - younger"
+}
+
+** Work attitudes sum variable
+{
+* Elder
+prorate dem13e18 dem14e18 dem15e18 dem16e18 dem17e18 dem18e18 dem19e18, gen(watte18) verbose
+label var watte18 "Work attitudes (sum) - elder"
+
+* Younger
+prorate dem13y18 dem14y18 dem15y18 dem16y18 dem17y18 dem18y18 dem19y18, gen(watty18) verbose
+label var watty18 "Work attitudes (sum) - younger"
+}
+
+** Ever worked variable
+{
+tab dem5e18
+tab dem9e18
+
+* Elder
+egen everworkede18 = rowtotal (dem9e18 dem5e18)
+codebook everworkede18
+recode everworkede18 0=. if(dem5e18==.)
+codebook everworkede18
+
+label var everworkede18 "Ever employed - elder"
+label define everworkede18 0 "Never employed" 1 "Current or past employment"
+label values everworkede18 everworkede18
+
+* Younger
+egen everworkedy18 = rowtotal (dem9y18 dem5y18)
+codebook everworkedy18
+recode everworkedy18 0=. if(dem5e18==.)
+codebook everworkedy18
+
+label var everworkedy18 "Ever employed - younger"
+label define everworkedy18 0 "Never employed" 1 "Current or past employment"
+label values everworkedy18 everworkedy18
+}
+
+** Currently working variable
+{
+* Elder 
+gen workingcurre18 = dem5e18
+tab workingcurre18
+recode workingcurre18 0=0 1=2			// Code currently working as 2 for 0-1-2 work history variable
+tab workingcurre18
+
+label var workingcurre18 "Currently working - elder"
+label define workingcurre18 0 "Not employed" 2 "Current employment"
+label values workingcurre18 workingcurre18
+
+* Younger
+gen workingcurry18 = dem5y18
+tab workingcurry18
+recode workingcurry18 0=0 1=2			// Code currently working as 2 for 0-1-2 work history variable
+tab workingcurry18
+
+label var workingcurry18 "Currently working - younger"
+label define workingcurry18 0 "Not employed" 2 "Current employment"
+label values workingcurry18 workingcurre18
+}
+
+** Work history (never worked - previously - currently)
+{
+tab dem9e18
+tab workingcurre18
+egen workhistorye18 = rowtotal (dem9e18 workingcurre18)
+tab workhistorye18
+
+codebook dem5e18						// Original currently working variable
+codebook dem9e18
+codebook workhistorye18
+recode workhistorye18 0=. if(dem5e18==.)
+codebook workhistorye18
+codebook dem5e18
+recode workhistorye18 0=. if(dem9e18==. & dem5e18==1)			// If dem5e18==1 because dem9e18 is only completed if dem5e18=0
+codebook workhistorye18
+
+label var workhistorye18 "Work history - elder"
+label define workhistorye18 0 "Never employed" 1 "Previously employed" 2 "Currently employed"
+label values workhistorye18 workhistorye18
+codebook workhistorye18
+
+* Younger
+tab dem9y18
+tab workingcurry18
+egen workhistoryy18 = rowtotal (dem9y18 workingcurry18)
+tab workhistoryy18
+
+codebook dem5y18
+codebook dem9y18
+codebook workhistoryy18
+recode workhistoryy18 0=. if(dem5y18==.)
+codebook workhistoryy18
+codebook dem5y18
+recode workhistoryy18 0=. if(dem9y18==. & dem5y18==1)
+codebook workhistoryy18
+
+label var workhistoryy18 "Work history - younger"
+label define workhistoryy18 0 "Never employed" 1 "Previously employed" 2 "Currently employed"
+label values workhistoryy18 workhistoryy18
+codebook workhistoryy18
+}
+}
+
+/* SM2 variables */
+{
+** Subjective social status - recode
+codebook psstdysm2e
+recode psstdysm2e (5=1) (4=2) (3=3) (2=4) (1=5) (.=.), gen(psstdysm2er)
+codebook psstdysm2e psstdysm2er 
+label var psstdysm2er "Perceived social status - today - [SM2] (recode)"
+label define psstdysm2er 1 "Poor" 5 "Rich"
+label values psstdysm2er psstdysm2er
+
+** Recode loneliness scales to 0-1-2
+* Elder
+recode lonely1sm2e (1=0) (2=1) (3=2), gen(lonely1sm2er)
+recode lonely2sm2e (1=0) (2=1) (3=2), gen(lonely2sm2er)
+recode lonely3sm2e (1=0) (2=1) (3=2), gen(lonely3sm2er)
+recode lonely4sm2e (1=0) (2=1) (3=2), gen(lonely4sm2er)
+
+* Younger
+recode lonely1sm2y (1=0) (2=1) (3=2), gen(lonely1sm2yr)
+recode lonely2sm2y (1=0) (2=1) (3=2), gen(lonely2sm2yr)
+recode lonely3sm2y (1=0) (2=1) (3=2), gen(lonely3sm2yr)
+recode lonely4sm2y (1=0) (2=1) (3=2), gen(lonely4sm2yr)
+
+** Create loneliness sum scales
+* Elder
+prorate lonely1sm2er lonely2sm2er lonely3sm2er lonely4sm2er, gen(lonelysm2e) verbose
+tab lonelysm2e
+
+* Younger
+prorate lonely1sm2yr lonely2sm2yr lonely3sm2yr lonely4sm2yr, gen(lonelysm2y) verbose
+tab lonelysm2y
+}
+
+/* Cross wave variables */
+{
+* SES - dichotomise high/low SES
+codebook seswq35
+recode seswq35 (3=2), gen(seswq35r)
+
+label var seswq35r "Social class (dummy)"
+label define seswq35r 1 "Low" 2 "Medium-high"
+label values seswq35r seswq35r
+codebook seswq35 seswq35r
+
+*** Loneliness and SSS cross-sweep difference scores
+codebook psstdysm2er
+codebook sicountrye18
+codebook sta04ec12r 
+
+* SSS SM2 - P18
+gen sss18_26_diff = (psstdysm2er - sicountrye18)
+tab sss18_26_diff
+
+* SSS P18 - P12
+gen sss12_18_diff = (sicountrye18 - sta04ec12r)
+tab sss12_18_diff
+
+* SSS SM2 - P12 
+gen sss12_26_diff = (psstdysm2er - sta04ec12r)
+tab sss12_26_diff
+
+* Loneliness SM2 - P18 
+gen lonely18_26_diff = (lonelysm2e - lonelye18)
+tab lonely18_26_diff
+
+* Loneliness P18 - P12 
+gen lonely12_18_diff = (lonelye18 - lonelye12)
+tab lonely12_18_diff
+
+* Lonliness SM2 - P12 
+gen lonely12_26_diff = (lonelysm2e - lonelye12)
+tab lonely12_26_diff
+
+}
+
+
+***************** EMPLOYABILITY EFA (METHODS) ***************** 
+
+*** Employability scores - EFA									*** Table 1 
+{
+** Elder
+* Create xlist 
+global xlist educachve18 workhistorye18 jprepse18 jprepae18 optime18 jchnce18 watte18 
+
+* Factor analysis 
+factor $xlist, factors(1)
+
+* Factor score
+predict f1 
+rename f1 f1e_reg  
+
+predict f1, bartlett
+rename f1 f1e_bartlett
+
+** Younger 
+* Create xlist - ordinal/sum variables only - elder
+global xlist educachvy18 workhistoryy18 jprepsy18 jprepay18 optimy18 jchncy18 watty18 
+
+* Factor analysis 
+factor $xlist, factors(1)
+
+* Factor score
+predict f1  
+rename f1 f1y_reg  // younger
+
+predict f1, bartlett 
+rename f1 f1y_bartlett // younger
+}
+
+*** Scree plot of the eigenvalues								*** Supp. figure
+screeplot, yline(1)
+
+
+************************ DESCRIPTIVES ************************* 
+
+*** Loneliness descriptives										*** Text: methods
+{
+sum lonelye12 lonelye18 lonelysm2e
+
+ssc install omegacoef
+omegacoef lonely1sm2yr lonely2sm2yr lonely3sm2yr lonely4sm2yr
+}
+
+*** Social position indicators correlations						*** Table 2 
+{
+** Correlations
+pwcorr seswq35 neete18 f1e_reg sta04ec12r sicountrye18 psstdysm2e
+spearman neete18 seswq35 f1e_reg sicountrye18 psstdysm2e, pw
+
+* P values
+reg seswq35 f1e_reg, cluster (familyid) 
+reg seswq35 sicountrye18, cluster (familyid)  
+reg seswq35 psstdysm2e, cluster (familyid) 
+reg seswq35 sta04ec12r, cluster (familyid) 
+reg f1e_reg sicountrye18, cluster (familyid)  
+reg f1e_reg psstdysm2e, cluster (familyid) 
+reg f1e_reg sta04ec12r, cluster (familyid)
+reg sta04ec12r sicountrye18, cluster (familyid)
+reg sta04ec12r psstdysm2e, cluster (familyid)
+reg sicountrye18 psstdysm2e, cluster (familyid) 
+}
+
+
+******************** REGRESSION ANALYSES **********************	
+																*** Table 3
+/* DV: P18 NEET status (logistic) */
+{
+** IV: P18 loneliness
+* Model 1: age 18 loneliness only
+logistic neete18 lonelye18 sampsex i.seswq35, cluster(familyid)
+
+* Check sex interaction term
+logistic neete18 c.lonelye18##sampsex i.seswq35, cluster(familyid)
+
+* Model 2: add age 18 mental health
+logistic neete18 lonelye18 mdesxe18 gadsxe18 bfine18 sampsex i.seswq35, cluster(familyid)
+
+* Model 3: age 18 mental health + functioning 
+logistic neete18 lonelye18 mdesxe18 gadsxe18 bfine18 parente18r audsxe18 anycrime18_s2_Sep2017 sampsex i.seswq35, cluster(familyid)
+
+* Model 4: age 18 mental health + functioning + age 12 loneliness 
+logistic neete18 lonelye12 lonelye18 mdesxe18 gadsxe18 bfine18 parente18r audsxe18 anycrime18_s2_Sep2017 sampsex i.seswq35, cluster(familyid)
+
+** IV: P12 loneliness
+* Model 5: loneliness age 12 only
+logistic neete18 lonelye12 sampsex i.seswq35, cluster(familyid)
+
+* Check sex interaction term
+logistic neete18 c.lonelye12##sampsex i.seswq35, cluster(familyid)
+
+* Model 6: add age 12 mental health 
+logistic neete18 lonelye12 deprse12 masce12 bfine12 sampsex i.seswq35, cluster(familyid)
+
+* Model 7: age 12 mental health + functioning
+logistic neete18 lonelye12 deprse12 masce12 bfine12 alce12 smoke12 sampsex i.seswq35, cluster(familyid)
+}
+
+/* DV: P18 employability (linear) */
+{
+** IV: P18 loneliness
+* Model 1: age 18 loneliness only 
+reg f1e_reg lonelye18 sampsex i.seswq35, cluster(familyid)
+
+* Check sex interaction term
+reg f1e_reg c.lonelye18##sampsex i.seswq35, cluster(familyid)
+
+* Model 2: add age 18 mental health
+reg f1e_reg lonelye18 mdesxe18 gadsxe18 bfine18 sampsex i.seswq35, cluster(familyid)
+
+* Model 3: add age 18 mental health + functioning 
+reg f1e_reg lonelye18 mdesxe18 gadsxe18 bfine18 parente18r audsxe18 anycrime18_s2_Sep2017 sampsex i.seswq35, cluster(familyid)
+
+* Model 4: age 18 loneliness + MH + functioning + age 12 loneliness 
+reg f1e_reg lonelye12 lonelye18 mdesxe18 gadsxe18 bfine18 parente18r audsxe18 anycrime18_s2_Sep2017 sampsex i.seswq35, cluster(familyid)
+
+** IV: age 12 loneliness
+* Model 5: age 12 loneliness only
+reg f1e_reg lonelye12 sampsex i.seswq35, cluster(familyid)
+
+* Checking sex interaction term								*** In-text stats
+reg f1e_reg c.lonelye12##sampsex i.seswq35, cluster(familyid)
+
+reg f1e_reg lonelye12 i.seswq35 if sampsex==1, cluster(familyid) // Males
+reg f1e_reg lonelye12 i.seswq35 if sampsex==2, cluster(familyid) // Females
+
+* Model 6: add age 12 mental health
+reg f1e_reg lonelye12 deprse12 masce12 bfine12 sampsex i.seswq35, cluster(familyid)
+
+* Model 7: age 12 mental health + functioning
+reg f1e_reg lonelye12 deprse12 masce12 bfine12 alce12 smoke12 sampsex i.seswq35, cluster(familyid)
+}
+
+/* DV: P18 social status (linear) */
+{
+** IV: age 18 loneliness
+* Model 1: age 18 loneliness only
+reg sicountrye18 lonelye18 sampsex i.seswq35, cluster(familyid)
+
+* Check sex interaction
+reg sicountrye18 c.lonelye18##sampsex i.seswq35, cluster(familyid)
+
+* Model 2: add age 18 mental health 
+reg sicountrye18 lonelye18 mdesxe18 gadsxe18 bfine18 sampsex i.seswq35, cluster(familyid)
+
+* Model 3: add age 18 mental health + functioning 
+reg sicountrye18 lonelye18 mdesxe18 gadsxe18 bfine18 parente18r audsxe18 anycrime18_s2_Sep2017 sampsex i.seswq35, cluster(familyid)
+
+* Model 4: age 18 MH + functioning + age 12 loneliness 
+reg sicountrye18 lonelye12 lonelye18 mdesxe18 gadsxe18 bfine18 parente18r audsxe18 anycrime18_s2_Sep2017 sampsex i.seswq35, cluster(familyid)
+
+reg sicountrye18 lonelye12 sta04ec12 lonelye18 mdesxe18 gadsxe18 bfine18 parente18r audsxe18 anycrime18_s2_Sep2017 sampsex i.seswq35, cluster(familyid)
+
+** IV: age 12 loneliness
+* Model 5: age 12 loneliness only
+reg sicountrye18 lonelye12 sampsex i.seswq35, cluster(familyid)
+
+* Checking sex interaction term							
+reg sicountrye18 c.lonelye12##sampsex i.seswq35, cluster(familyid) 
+
+* Model 6: add age 12 mental health
+reg sicountrye18 lonelye12 deprse12 masce12 bfine12 sampsex i.seswq35, cluster(familyid)
+
+* Model 7: age 12 mental health + functioning
+reg sicountrye18 lonelye12 deprse12 masce12 bfine12 alce12 smoke12 sampsex i.seswq35, cluster(familyid)
+}
+
+
+*************** SOCIAL STATUS ANALYSES: CO-TWIN ***************
+
+*** Prepare twin difference scores
+{
+* Loneliness
+gen lonely18_diff = (lonelye18 - lonelyy18)
+
+* Subjective social status
+gen sicountry18_diff = (sicountrye18 - sicountryy18)
+
+* Education 
+gen educachve18_diff = (educachve18 - educachvy18)
+
+* Employment status
+gen dem5e18_diff = (dem5e18 - dem5y18)
+
+* NEET status
+gen neete18_diff = (neete18 - neety18)
+tab neete18_diff
+
+* Employability 
+gen f1_reg_diff = (f1e_reg - f1y_reg)
+tab f1_reg_diff
+summarize f1_reg_diff
+}
+
+*** Co-twin analyses 											*** Table 4
+{
+* Model 1 - loneliness only
+reg sicountry18_diff lonely18_diff if rorderp5 == 0 & cohabe18==1
+
+* Model 2 - add education + NEET status
+reg sicountry18_diff lonely18_diff educachve18_diff neete18_diff if rorderp5 == 0 & cohabe18==1
+
+* Model 3 - add employability 
+reg sicountry18_diff lonely18_diff educachve18_diff neete18_diff f1_reg_diff if rorderp5 == 0 & cohabe18==1
+}
+
+*** Twin difference loneliness + SSS figure						*** Figure 1
+{
+* z score age 18 SSS
+sum sicountrye18
+gen zsicountrye18 = (sicountrye18 - 3.117532)/0.7440084
+sum sicountrye18 zsicountrye18
+
+* Loneliness - 4 point difference
+codebook lonely18_diff
+recode lonely18_diff (-8/-4=-1) (-3/3=0) (4/8=1), gen (lonely18_diff_dummy4)
+codebook lonely18_diff_dummy4
+
+* Mean z scores for more and less lonely twin for figure
+sum zsicountrye18 if lonely18_diff_dummy4 == -1		// Less lonely
+sum zsicountrye18 if lonely18_diff_dummy4 == 1		// More lonely
+}
+
+
+************** SOCIAL STATUS ANALYSES: CROSS-LAG **************
+
+*** Loneliness + SSS change across sweeps  						*** Table 5
+{
+*** Loneliness
+* Recode age 12 loneliness to 0-8 scale 
+gen lonelye12_r = lonelye12*(8/6)
+summarize lonelye12 lonelye12_r
+
+* Mean at each sweep
+summarize lonelye12_r lonelye18 lonelysm2e
+
+* t-test: age 12 - 18
+ttest lonelye18 == lonelye12_r
+reg lonelye18 lonelye12_r, cluster(familyid)
+
+* t-test: age 18 - 26
+ttest lonelysm2e == lonelye18
+reg lonelysm2e lonelye18, cluster(familyid)
+
+* t-test: age 12 - 26
+ttest lonelysm2e == lonelye12_r
+reg lonelysm2e lonelye12_r, cluster(familyid)
+
+*** SSS
+* Mean at each sweep
+summarize sta04ec12r sicountrye18 psstdysm2er
+
+* t-test: age 12 - 18
+ttest sicountrye18 == sta04ec12r
+reg sicountrye18 sta04ec12r, cluster(familyid)
+
+* t-test: age 18 - 26
+ttest psstdysm2er == sicountrye18
+reg psstdysm2er sicountrye18, cluster(familyid)
+
+* t-test: age 12 - 26
+ttest psstdysm2er == sta04ec12r
+reg psstdysm2er sta04ec12r, cluster(familyid) 
+}
+
+*** Correlation of cross-sweep difference scores				*** Table 6
+{
+* Age 12 - 18
+pwcorr lonely12_18_diff sss12_18_diff
+reg lonely12_18_diff sss12_18_diff, cluster(familyid)
+
+* Age 18 - 26
+pwcorr lonely18_26_diff sss18_26_diff
+reg lonely18_26_diff sss18_26_diff, cluster(familyid)
+
+* Age 12 - 26
+pwcorr lonely12_26_diff sss12_26_diff
+reg lonely12_26_diff sss12_26_diff, cluster(familyid)
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
