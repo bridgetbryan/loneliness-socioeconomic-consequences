@@ -1,0 +1,441 @@
+---
+title: "The socioeconomic consequences of loneliness: Evidence from a nationally representative longitudinal study of young adults. Code review by K N Thompson"
+output:
+  word_document:
+    toc: yes
+    toc_depth: '2'
+  html_document:
+    df_print: paged
+    toc: yes
+    toc_depth: 2
+    toc_float:
+      collapsed: no
+    number_sections: no
+    highlight: monochrome
+    theme: flatly
+    code_folding: hide
+    includes:
+      after_body: footer.html
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      comment = NA,
+                      prompt = FALSE,
+                      cache = FALSE,
+                      message = FALSE,
+                      warning = FALSE,
+                      results = 'asis')
+
+options(bitmapType = 'quartz') # to render fonts better
+```
+
+```{r Clear global environment, include=FALSE}
+remove(list = ls())
+```
+
+```{r Load packages, include=FALSE}
+library(knitr)
+library(haven)
+library(lavaan)
+library(ChiBarSq.DiffTest)
+library(janitor)
+library(tidyr)
+library(tidyverse)
+library(dplyr) #conflicts with tidyverse for e.g. rename and row_number
+```
+
+```{r source the data file path, include=FALSE}
+#source raw data directory: data_raw and data included
+source("file_path.R")
+```
+
+# Functions
+
+```{r functions}
+# Table of model fit 
+table.model.fit <- function(model){
+  model.fit <- as.data.frame(t(as.data.frame(model$FIT))) %>%
+    dplyr::select(chisq, df, chisq.scaled, cfi.robust, tli.robust, aic, bic, bic2, rmsea.robust, rmsea.ci.lower.robust, rmsea.ci.upper.robust, srmr) #can only be used with "MLR" estimator
+  return(model.fit)
+}
+
+# Table of regression and correlation (standardised covariance) coefficients
+table.model.coef <- function(model, type, constraints){
+  if (type == "RICLPM" & constraints == "No"){
+    model.coef <- as.tibble(model$PE[c(13:32),]) %>% 
+      dplyr::select(lhs, op, rhs, std.all, pvalue) %>%
+      mutate_if(is.numeric, round, 3)
+    return(model.coef)
+    
+  } else if(type == "RICLPM" & constraints == "Yes"){
+    model.coef <- as.tibble(model$PE[c(13:32),]) %>% 
+      dplyr::select(lhs, op, rhs, label, std.all, pvalue) %>%
+      mutate_if(is.numeric, round, 3)
+    return(model.coef)
+    
+  } else if(type == "CLPM" & constraints == "No"){
+    model.coef <- as.tibble(model$PE[c(1:17),]) %>% 
+      dplyr::select(lhs, op, rhs, std.all, pvalue) %>%
+      mutate_if(is.numeric, round, 3)
+    return(model.coef)
+    
+  } else if(type == "CLPM" & constraints == "Yes"){
+    model.coef <- as.tibble(model$PE[c(1:17),]) %>% 
+      dplyr::select(lhs, op, rhs, label, std.all, pvalue) %>%
+      mutate_if(is.numeric, round, 3)
+    return(model.coef)
+    
+  } else {model.coef <- NULL}
+}
+```
+
+# Data prep
+
+Loneliness variables:
+
+* lonelye12
+* lonelye18
+* lonelysm2e
+
+Subjective social status:
+
+* sta04ec12
+* sicountrye18
+* psstdysm2er
+
+```{r read in dta data file}
+dat.raw <- read_dta(paste0(data.raw_path))
+
+dat <- dat.raw %>%
+  dplyr::select(atwinid,
+         sampsex,
+         seswq35,
+         sethnic,
+         lonelye12,
+         lonelye18,
+         lonelysm2e,
+         sta04ec12,
+         sicountrye18,
+         psstdysm2er
+  )
+
+colnames(dat)
+```
+
+# CLPM
+
+Stata code (Standardised co-efficients, maximum likelihood with missing):
+
+sem (lonelye12 -> lonelye18, ) # done
+    (lonelye12 -> sicountrye18, ) # done
+    (sta04ec12 -> lonelye18, ) # done
+    (sta04ec12 -> sicountrye18, ) # done
+    (lonelye18 -> lonelysm2e, ) # done
+    (lonelye18 -> psstdysm2er, ) # done
+    (sicountrye18 -> lonelysm2e, ) # done
+    (sicountrye18 -> psstdysm2er, ), # done
+      method(mlmv) 
+      vce(cluster familyid) 
+      standardized cov( lonelye12*sta04ec12 e.lonelye18*e.sicountrye18 e.lonelysm2e*e.psstdysm2er) 
+      nocapslatent
+// N = 2,195
+
+```{r specify CLPM}
+CLPM <- '
+  # Estimate the lagged effects between the observed variables
+  lonelye18 + sicountrye18 ~ lonelye12 + sta04ec12 # loneliness and subsocstatus at 12 predicting them at 18
+  lonelysm2e + psstdysm2er ~ lonelye18 + sicountrye18 # loneliness and subsocstatus at 18 predicting them at 26
+
+  # Estimate the covariance between the observed variables at the first wave 
+  lonelye12 ~~ sta04ec12 # Covariance
+  
+  # Estimate the covariances between the residuals of the observed variables
+  lonelye18 ~~ sicountrye18
+  lonelysm2e ~~ psstdysm2er
+  
+  # Estimate the (residual) variance of the observed variables.
+  lonelye12 ~~ lonelye12 # Variances
+  sta04ec12 ~~ sta04ec12 
+  lonelye18 ~~ lonelye18 # Residual variances
+  sicountrye18 ~~ sicountrye18 
+  lonelysm2e ~~ lonelysm2e 
+  psstdysm2er ~~ psstdysm2er 
+'
+```
+
+```{r fit CLPM}
+CLPM.fit <- lavaan(CLPM, 
+                   data = dat, 
+                   missing = 'ML',
+                   meanstructure = TRUE, 
+                   int.ov.free = TRUE,
+                   se = "robust",
+                   estimator = "MLR" #maximum likelihood with robust (Huber-White) standard errors and a scaled (Yuan-Bentler) and robust test statistic 
+                   ) 
+
+CLPM.fit.summary <- summary(CLPM.fit, 
+                            fit.measures = TRUE,
+                            standardized = TRUE)
+
+#Table of model fit 
+CLPM.fit.summary.fit <- table.model.fit(CLPM.fit.summary)
+CLPM.fit.summary.fit
+
+#Table of regression coefficients and covariances (concurrent associations)
+CLPM.fit.summary.reg <- table.model.coef(model = CLPM.fit.summary, type = "CLPM", constraints = "No")
+CLPM.fit.summary.reg
+```
+
+ Used 2195 observations, same as Stata. 
+ 
+ All regression paths replicate those found in Stata. 
+ 
+# Constrained CLPM - autoregressive 
+ 
+```{r specify CLPM2}
+CLPM2 <- '
+  # Estimate the lagged effects between the observed variables
+  lonelye18  ~ a*lonelye12 + sta04ec12 
+  sicountrye18 ~ lonelye12 + b*sta04ec12 
+  
+  lonelysm2e ~ a*lonelye18 + sicountrye18 
+  psstdysm2er ~ lonelye18 + b*sicountrye18 
+
+  # Estimate the covariance between the observed variables at the first wave 
+  lonelye12 ~~ sta04ec12 # Covariance
+  
+  # Estimate the covariances between the residuals of the observed variables
+  lonelye18 ~~ sicountrye18
+  lonelysm2e ~~ psstdysm2er
+  
+  # Estimate the (residual) variance of the observed variables.
+  lonelye12 ~~ lonelye12 # Variances
+  sta04ec12 ~~ sta04ec12 
+  lonelye18 ~~ lonelye18 # Residual variances
+  sicountrye18 ~~ sicountrye18 
+  lonelysm2e ~~ lonelysm2e 
+  psstdysm2er ~~ psstdysm2er 
+'
+```
+ 
+```{r fit CLPM2}
+CLPM2.fit <- lavaan(CLPM2, 
+                   data = dat, 
+                   missing = 'ML',
+                   meanstructure = TRUE, 
+                   int.ov.free = TRUE,
+                   se = "robust",
+                   estimator = "MLR" #maximum likelihood with robust (Huber-White) standard errors and a scaled (Yuan-Bentler) and robust test statistic 
+                   ) 
+
+CLPM2.fit.summary <- summary(CLPM2.fit, 
+                            fit.measures = TRUE,
+                            standardized = TRUE)
+
+#Table of model fit 
+CLPM2.fit.summary.fit <- table.model.fit(CLPM2.fit.summary)
+CLPM2.fit.summary.fit
+
+#Table of regression coefficients and covariances (concurrent associations)
+CLPM2.fit.summary.reg <- table.model.coef(model = CLPM2.fit.summary, type = "CLPM", constraints = "Yes")
+CLPM2.fit.summary.reg
+```
+
+```{r LRT for CLPMcomb and CLPMcomb2}
+lavTestLRT(CLPM.fit, CLPM2.fit, method = "satorra.bentler.2010")
+```
+Not significantly worse fit - can constrain autoregressive paths. 
+
+# Constrained CLPM - autoregressive + crosslag
+ 
+```{r specify CLPM3}
+CLPM3 <- '
+  # Estimate the lagged effects between the observed variables
+  lonelye18  ~ a*lonelye12 + c*sta04ec12 
+  sicountrye18 ~ d*lonelye12 + b*sta04ec12 
+  
+  lonelysm2e ~ a*lonelye18 + c*sicountrye18 
+  psstdysm2er ~ d*lonelye18 + b*sicountrye18 
+
+  # Estimate the covariance between the observed variables at the first wave 
+  lonelye12 ~~ sta04ec12 # Covariance
+  
+  # Estimate the covariances between the residuals of the observed variables
+  lonelye18 ~~ sicountrye18
+  lonelysm2e ~~ psstdysm2er
+  
+  # Estimate the (residual) variance of the observed variables.
+  lonelye12 ~~ lonelye12 # Variances
+  sta04ec12 ~~ sta04ec12 
+  lonelye18 ~~ lonelye18 # Residual variances
+  sicountrye18 ~~ sicountrye18 
+  lonelysm2e ~~ lonelysm2e 
+  psstdysm2er ~~ psstdysm2er 
+'
+```
+ 
+```{r fit CLPM3}
+CLPM3.fit <- lavaan(CLPM3, 
+                   data = dat, 
+                   missing = 'ML',
+                   meanstructure = TRUE, 
+                   int.ov.free = TRUE,
+                   se = "robust",
+                   estimator = "MLR" #maximum likelihood with robust (Huber-White) standard errors and a scaled (Yuan-Bentler) and robust test statistic 
+                   ) 
+
+CLPM3.fit.summary <- summary(CLPM3.fit, 
+                            fit.measures = TRUE,
+                            standardized = TRUE)
+
+#Table of model fit 
+CLPM3.fit.summary.fit <- table.model.fit(CLPM3.fit.summary)
+CLPM3.fit.summary.fit
+
+#Table of regression coefficients and covariances (concurrent associations)
+CLPM3.fit.summary.reg <- table.model.coef(model = CLPM3.fit.summary, type = "CLPM", constraints = "Yes")
+CLPM3.fit.summary.reg
+```
+
+```{r LRT for CLPMcomb and CLPMcomb2}
+lavTestLRT(CLPM.fit, CLPM3.fit, method = "satorra.bentler.2010")
+```
+Significantly worse fit (p=0.022)- can't constrain autoregressive + crosslag paths. 
+
+*Constrained autoregressive (CLPM2) as the chosen model.*
+
+# RI-CLPM
+
+```{r specify RICLPM}
+RICLPM <- '
+  # Create between components (random intercepts treated as factors here)
+  RIln =~ 1*lonelye12 + 1*lonelye18 + 1*lonelysm2e     #x
+  RIss =~ 1*sta04ec12 + 1*sicountrye18 + 1*psstdysm2er #y
+
+  # Create within-person centered variables
+  wln12 =~ 1*lonelye12
+  wln18 =~ 1*lonelye18
+  wln26 =~ 1*lonelysm2e 
+  wss12 =~ 1*sta04ec12
+  wss18 =~ 1*sicountrye18
+  wss26 =~ 1*psstdysm2er
+  
+  # Estimate the lagged effects between the within-person centered variables
+  wln18 + wss18 ~ wln12 + wss12
+  wln26 + wss26 ~ wln18 + wss18 
+  
+  # Estimate the covariance between the within-person centered variables at the first wave
+  wln12 ~~ wss12 # Covariance
+  
+  # Estimate the covariances between the residuals of the within-person centered variables (the innovations)
+  wln18 ~~ wss18
+  wln26 ~~ wss26
+  
+  # Estimate the variance and covariance of the random intercepts
+  RIln ~~ RIln
+  RIss ~~ RIss
+  RIln ~~ RIss
+  
+  # Estimate the (residual) variance of the within-person centered variables.
+  wln12 ~~ wln12 # Variances
+  wss12 ~~ wss12 
+  wln18 ~~ wln18 # Residual variances
+  wss18 ~~ wss18 
+  wln26 ~~ wln26 
+  wss26 ~~ wss26 
+'
+```
+
+```{r fit RICLPM}
+RICLPM.fit <- lavaan(RICLPM,               # model
+                     data = dat,           # data
+                     missing = 'ML',       # how to handle missing data 
+                     meanstructure = TRUE, # adds intercepts/means to the model for both observed and latent variables
+                     se = "robust",        # robust standard errors
+                     int.ov.free = TRUE,   # if FALSE, the intercepts of the observed variables are fixed to zero
+                     estimator = "MLR" #maximum likelihood with robust (Huber-White) standard errors and a scaled (Yuan-Bentler) and robust test statistic
+)
+
+RICLPM.fit.summary <- summary(RICLPM.fit, 
+                              fit.measures = TRUE,
+                              standardized = TRUE)
+
+#Table of model fit 
+RICLPM.fit.summary.fit <- table.model.fit(RICLPM.fit.summary)
+#Table of regression coefficients and covariances (concurrent associations)
+RICLPM.fit.summary.reg <- table.model.coef(model = RICLPM.fit.summary, type = "RICLPM", constraints = "No")
+RICLPM.fit.summary.reg
+```
+
+# Constrained RI-CLPM - autoregressive + cross-lag
+
+```{r specify RICLPM2}
+RICLPM2 <- '
+  # Create between components (random intercepts treated as factors here)
+  RIln =~ 1*lonelye12 + 1*lonelye18 + 1*lonelysm2e     #x
+  RIss =~ 1*sta04ec12 + 1*sicountrye18 + 1*psstdysm2er #y
+
+  # Create within-person centered variables
+  wln12 =~ 1*lonelye12
+  wln18 =~ 1*lonelye18
+  wln26 =~ 1*lonelysm2e 
+  wss12 =~ 1*sta04ec12
+  wss18 =~ 1*sicountrye18
+  wss26 =~ 1*psstdysm2er
+  
+  # Estimate the lagged effects between the within-person centered variables
+  wln18 ~ a*wln12 + c*wss12
+  wss18 ~ d*wln12 + b*wss12
+  
+  wln26 ~ a*wln18 + c*wss18 
+  wss26 ~ d*wln18 + b*wss18 
+  
+  # Estimate the covariance between the within-person centered variables at the first wave
+  wln12 ~~ wss12 # Covariance
+  
+  # Estimate the covariances between the residuals of the within-person centered variables (the innovations)
+  wln18 ~~ wss18
+  wln26 ~~ wss26
+  
+  # Estimate the variance and covariance of the random intercepts
+  RIln ~~ RIln
+  RIss ~~ RIss
+  RIln ~~ RIss
+  
+  # Estimate the (residual) variance of the within-person centered variables.
+  wln12 ~~ wln12 # Variances
+  wss12 ~~ wss12 
+  wln18 ~~ wln18 # Residual variances
+  wss18 ~~ wss18 
+  wln26 ~~ wln26 
+  wss26 ~~ wss26 
+'
+```
+
+```{r fit RICLPM2}
+RICLPM2.fit <- lavaan(RICLPM2,               # model
+                     data = dat,           # data
+                     missing = 'ML',       # how to handle missing data 
+                     meanstructure = TRUE, # adds intercepts/means to the model for both observed and latent variables
+                     se = "robust",        # robust standard errors
+                     int.ov.free = TRUE,   # if FALSE, the intercepts of the observed variables are fixed to zero
+                     estimator = "MLR" #maximum likelihood with robust (Huber-White) standard errors and a scaled (Yuan-Bentler) and robust test statistic
+)
+
+RICLPM2.fit.summary <- summary(RICLPM2.fit, 
+                              fit.measures = TRUE,
+                              standardized = TRUE)
+
+#Table of model fit 
+RICLPM2.fit.summary.fit <- table.model.fit(RICLPM2.fit.summary)
+#Table of regression coefficients and covariances (concurrent associations)
+RICLPM2.fit.summary.reg <- table.model.coef(model = RICLPM2.fit.summary, type = "RICLPM", constraints = "Yes")
+RICLPM2.fit.summary.reg
+```
+
+```{r LRT for RICLPM and RICLPM2}
+lavTestLRT(RICLPM.fit, RICLPM2.fit, method = "satorra.bentler.2010")
+```
+
+No significant loss of fit when constrained - go with constrained model. 
